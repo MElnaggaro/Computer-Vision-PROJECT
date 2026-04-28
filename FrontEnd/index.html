@@ -9,7 +9,7 @@
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
     
     <!-- Styles -->
     <link rel="stylesheet" href="CSS/styles.css">
@@ -26,7 +26,29 @@
 </head>
 <body>
 
-    <!-- Container for future 3D / Three.js integration -->
+    <!-- ============================= -->
+    <!-- CINEMATIC INTRO OVERLAY       -->
+    <!-- ============================= -->
+    <div id="intro-screen">
+        <!-- Intro particle canvas for ambient effect -->
+        <canvas id="intro-particles"></canvas>
+
+        <!-- Centered intro content -->
+        <div id="intro-content">
+            <div id="intro-loader">
+                <div class="intro-spinner"></div>
+                <p id="intro-status">INITIALIZING AI CORE...</p>
+            </div>
+            <h1 id="intro-title">SMART CLASSROOM ASSISTANT</h1>
+        </div>
+
+        <!-- Scanline overlay for cinematic depth -->
+        <div class="intro-scanlines"></div>
+    </div>
+
+    <!-- ============================= -->
+    <!-- 3D SCENE CONTAINER            -->
+    <!-- ============================= -->
     <div id="three-container"></div>
 
     <!-- Animated Dynamic Background -->
@@ -167,8 +189,8 @@
                 </div>
             </section>
 
-            <!-- CTA Section -->
-            <section class="cta" id="demo">
+            <!-- CTA / Final Section -->
+            <section class="cta" id="final">
                 <div class="cta-box glass-panel">
                     <h2 class="cta-title">Ready to upgrade your classroom?</h2>
                     <p class="cta-subtitle">Experience the future of education with our smart assistant.</p>
@@ -188,7 +210,8 @@
         </div>
     </main>
 
-    <!-- Application Logic -->
+    <!-- Application Logic (order matters) -->
+    <script src="JS/intro-cinematic.js"></script>
     <script src="JS/three-scene.js"></script>
     <script src="JS/script.js"></script>
 </body>

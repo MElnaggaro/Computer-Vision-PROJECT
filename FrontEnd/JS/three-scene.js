@@ -1,209 +1,377 @@
-// three-scene.js
+// ============================================
+// THREE.JS CINEMATIC 3D SYSTEM
+// ============================================
+// Full-featured 3D layer with:
+//   1. Scene, Camera, Renderer setup
+//   2. AI-themed lighting (blue/purple)
+//   3. GLB model loading + intro integration
+//   4. Base idle animation (rotation + float)
+//   5. Mouse parallax interaction (lerp)
+//   6. Scroll-driven section transitions (GSAP)
+//   7. Fog + depth atmosphere
+//   8. Responsiveness & performance
+// ============================================
 
-// 1. Setup Scene
-const container = document.getElementById('three-container');
-const scene = new THREE.Scene();
+(() => {
+    'use strict';
 
-// Camera setup
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.z = 6; // Move camera slightly back to ensure visibility
+    // ─── DOM ───
+    const container = document.getElementById('three-container');
 
-// Renderer setup
-const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-// #three-container already has position: fixed, top: 0, left: 0, pointer-events: none in CSS
-container.appendChild(renderer.domElement);
+    // ─── Scene ───
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050510, 0.06); // Subtle depth fog
 
-// 2. Lighting (Futuristic AI Style)
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Soft base light
-scene.add(ambientLight);
+    // ─── Camera ───
+    const camera = new THREE.PerspectiveCamera(
+        45,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100
+    );
+    camera.position.z = 6;
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2); // Main highlight
-directionalLight.position.set(5, 5, 5);
-scene.add(directionalLight);
+    // ─── Renderer ───
+    const renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    container.appendChild(renderer.domElement);
 
-// Subtle colored lights for AI/Futuristic feel
-const blueLight = new THREE.PointLight(0x4F46E5, 2, 15); // Accent blue
-blueLight.position.set(-3, 3, 3);
-scene.add(blueLight);
 
-const purpleLight = new THREE.PointLight(0x9333EA, 2, 15); // Accent purple
-purpleLight.position.set(3, -3, 3);
-scene.add(purpleLight);
+    // ============================================
+    // LIGHTING — AI/FUTURISTIC STYLE
+    // ============================================
 
-// 3. Model Loading
-let model;
-let mixer;
-const clock = new THREE.Clock();
+    // Low ambient for base visibility
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+    scene.add(ambientLight);
 
-// Group to hold the model so we can separate base idle animation from scroll transformations
-const modelGroup = new THREE.Group();
-scene.add(modelGroup);
+    // Main directional (key light)
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(5, 5, 5);
+    scene.add(dirLight);
 
-const loader = new THREE.GLTFLoader();
+    // Blue accent — left/top
+    const bluePoint = new THREE.PointLight(0x4F46E5, 2.5, 20);
+    bluePoint.position.set(-4, 3, 4);
+    scene.add(bluePoint);
 
-// Load the 3D model
-loader.load(
-    'model/aiu 3d.glb', 
-    (gltf) => {
-        model = gltf.scene;
-        
-        // Center the model geometry
-        const box = new THREE.Box3().setFromObject(model);
-        const center = box.getCenter(new THREE.Vector3());
-        
-        model.position.x = -center.x;
-        model.position.y = -center.y;
-        model.position.z = -center.z;
-        
-        // We add the centered model to a pivot group if needed, but adding directly is fine
-        // since we use model for idle and modelGroup for scroll.
-        modelGroup.add(model);
-        
-        // Play embedded animations if they exist
-        if (gltf.animations && gltf.animations.length > 0) {
-            mixer = new THREE.AnimationMixer(model);
-            gltf.animations.forEach((clip) => {
-                mixer.clipAction(clip).play();
-            });
+    // Purple accent — right/bottom
+    const purplePoint = new THREE.PointLight(0x9333EA, 2.5, 20);
+    purplePoint.position.set(4, -2, 3);
+    scene.add(purplePoint);
+
+    // Pink rim light — behind
+    const rimLight = new THREE.PointLight(0xEC4899, 1.5, 15);
+    rimLight.position.set(0, 0, -5);
+    scene.add(rimLight);
+
+    // Subtle fill from below for depth
+    const fillLight = new THREE.PointLight(0x4F46E5, 0.8, 12);
+    fillLight.position.set(0, -4, 2);
+    scene.add(fillLight);
+
+
+    // ============================================
+    // MODEL LOADING
+    // ============================================
+    let model = null;
+    let mixer = null;
+    const clock = new THREE.Clock();
+
+    // ModelGroup separates scroll transforms from idle animations
+    const modelGroup = new THREE.Group();
+    modelGroup.visible = false;   // Hidden until intro reveal
+    scene.add(modelGroup);
+
+    const loader = new THREE.GLTFLoader();
+
+    loader.load(
+        'model/aiu 3d.glb',
+        (gltf) => {
+            model = gltf.scene;
+
+            // Center geometry
+            const box = new THREE.Box3().setFromObject(model);
+            const center = box.getCenter(new THREE.Vector3());
+            model.position.set(-center.x, -center.y, -center.z);
+
+            // Scale up for visual impact
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const desiredScale = 2.5 / maxDim; // Adjust so model fills ~2.5 units
+            model.scale.setScalar(desiredScale);
+
+            modelGroup.add(model);
+
+            // Play embedded animations
+            if (gltf.animations && gltf.animations.length > 0) {
+                mixer = new THREE.AnimationMixer(model);
+                gltf.animations.forEach((clip) => {
+                    mixer.clipAction(clip).play();
+                });
+            }
+
+            // Set initial transform to hero state
+            const heroState = states[0];
+            gsap.set(modelGroup.position, heroState.position);
+            gsap.set(modelGroup.rotation, heroState.rotation);
+
+            // Start fully transparent (for intro fade-in)
+            setModelOpacity(0);
+
+            // Notify the intro system
+            if (window.IntroSystem) {
+                window.IntroSystem.onModelLoaded();
+            }
+        },
+        (xhr) => {
+            // Optional: progress callback
+        },
+        (error) => {
+            console.error('3D Model load error:', error);
+            // Still allow intro to proceed
+            if (window.IntroSystem) {
+                window.IntroSystem.onModelLoaded();
+            }
         }
+    );
 
-        // Set initial state immediately
-        if (states.length > 0) {
-            gsap.set(modelGroup.position, states[0].position);
-            gsap.set(modelGroup.rotation, states[0].rotation);
+
+    // ─── Helper: Set model opacity (for fade-in) ───
+    const setModelOpacity = (opacity) => {
+        if (!model) return;
+        model.traverse((child) => {
+            if (child.isMesh && child.material) {
+                child.material.transparent = true;
+                child.material.opacity = opacity;
+            }
+        });
+    };
+
+
+    // ============================================
+    // INTRO INTEGRATION — MODEL REVEAL
+    // ============================================
+
+    // Listen for the reveal event from intro-cinematic.js
+    window.addEventListener('intro:reveal-model', () => {
+        modelGroup.visible = true;
+
+        // Fade in model over 2s
+        const fadeObj = { opacity: 0 };
+        gsap.to(fadeObj, {
+            opacity: 1,
+            duration: 2,
+            ease: 'power2.out',
+            onUpdate: () => setModelOpacity(fadeObj.opacity)
+        });
+
+        // Glow pulse — animate lights intensity (yoyo)
+        gsap.to(bluePoint, {
+            intensity: 4,
+            duration: 1.2,
+            yoyo: true,
+            repeat: 1,
+            ease: 'power2.inOut'
+        });
+        gsap.to(purplePoint, {
+            intensity: 4,
+            duration: 1.2,
+            yoyo: true,
+            repeat: 1,
+            ease: 'power2.inOut',
+            delay: 0.2
+        });
+    });
+
+
+    // ============================================
+    // TRANSFORM STATES — SCROLL-DRIVEN POSITIONS
+    // ============================================
+    // Model alternates LEFT ↔ RIGHT between sections
+
+    const states = [
+        {
+            id: "hero",
+            position: { x: -1.5, y: 0, z: 2 },
+            rotation: { x: 0, y: 0.5, z: 0 }
+        },
+        {
+            id: "features",
+            position: { x: 1.5, y: 0.2, z: 2.5 },
+            rotation: { x: 0.2, y: 1.8, z: 0 }
+        },
+        {
+            id: "workflow",
+            position: { x: -1.5, y: -0.2, z: 2.2 },
+            rotation: { x: 0, y: 3.2, z: 0.1 }
+        },
+        {
+            id: "impact",
+            position: { x: 1.5, y: 0.3, z: 1.8 },
+            rotation: { x: 0.3, y: 4.5, z: 0 }
+        },
+        {
+            id: "final",
+            position: { x: 0, y: 0, z: 1.6 },
+            rotation: { x: 0, y: 6.2, z: 0 }
         }
-    }, 
-    undefined, 
-    (error) => {
-        console.error('An error happened loading the 3D model:', error);
-    }
-);
+    ];
 
-// 4. Transform States System for Scroll-Driven Cinematic Experience
-const states = [
-  {
-    id: "hero",
-    position: { x: 0, y: 0, z: 0 },
-    rotation: { x: 0, y: 0, z: 0 }
-  },
-  {
-    id: "features",
-    position: { x: 1.5, y: 0.2, z: 1.0 },
-    rotation: { x: 0.2, y: 1.5, z: 0 }
-  },
-  {
-    id: "workflow",
-    position: { x: -1.5, y: -0.2, z: 0.5 },
-    rotation: { x: 0, y: 3.0, z: 0.1 }
-  },
-  {
-    id: "impact",
-    position: { x: 0.5, y: 0.3, z: 0.2 },
-    rotation: { x: 0.3, y: 4.5, z: 0 }
-  },
-  {
-    id: "demo",
-    position: { x: 0, y: 0, z: 1.5 },
-    rotation: { x: 0.1, y: 6.28, z: 0 } // Full rotation to reset visually
-  }
-];
 
-// 5. Scroll Detection & GSAP Animation
-let currentStateId = "hero";
+    // ============================================
+    // SCROLL DETECTION + GSAP TRANSITIONS
+    // ============================================
+    let currentStateId = "hero";
+    let scrollEnabled = false;
 
-window.addEventListener('scroll', () => {
-    if (!modelGroup) return;
+    // Enable scroll tracking after intro completes
+    window.addEventListener('intro:complete', () => {
+        scrollEnabled = true;
+    });
 
-    let activeStateId = currentStateId;
-    let minDistance = Infinity;
-    const centerY = window.innerHeight / 2;
+    window.addEventListener('scroll', () => {
+        if (!scrollEnabled || !modelGroup) return;
 
-    // Detect which section is active based on distance to center of screen
-    states.forEach(state => {
-        const element = document.getElementById(state.id);
-        if (element) {
-            const rect = element.getBoundingClientRect();
-            const elementCenterY = rect.top + rect.height / 2;
-            const distance = Math.abs(centerY - elementCenterY);
-            
-            if (distance < minDistance) {
-                minDistance = distance;
-                activeStateId = state.id;
+        let activeStateId = currentStateId;
+        let minDistance = Infinity;
+        const centerY = window.innerHeight / 2;
+
+        // Find the closest section to center of viewport
+        states.forEach(state => {
+            const el = document.getElementById(state.id);
+            if (el) {
+                const rect = el.getBoundingClientRect();
+                const elCenter = rect.top + rect.height / 2;
+                const dist = Math.abs(centerY - elCenter);
+
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    activeStateId = state.id;
+                }
+            }
+        });
+
+        // Animate only when state changes (no repeated triggers)
+        if (activeStateId !== currentStateId) {
+            currentStateId = activeStateId;
+            const target = states.find(s => s.id === currentStateId);
+
+            if (target) {
+                // Cinematic position transition
+                gsap.to(modelGroup.position, {
+                    x: target.position.x,
+                    y: target.position.y,
+                    z: target.position.z,
+                    duration: 1.5,
+                    ease: 'power3.out',
+                    overwrite: 'auto'
+                });
+
+                // Cinematic rotation transition
+                gsap.to(modelGroup.rotation, {
+                    x: target.rotation.x,
+                    y: target.rotation.y,
+                    z: target.rotation.z,
+                    duration: 1.5,
+                    ease: 'power3.out',
+                    overwrite: 'auto'
+                });
             }
         }
     });
 
-    // Animate to new state if changed
-    if (activeStateId !== currentStateId) {
-        currentStateId = activeStateId;
-        const targetState = states.find(s => s.id === currentStateId);
-        
-        if (targetState) {
-            // Cinematic transition using GSAP
-            gsap.to(modelGroup.position, {
-                x: targetState.position.x,
-                y: targetState.position.y,
-                z: targetState.position.z,
-                duration: 1.5, // Smooth duration
-                ease: "power3.out",
-                overwrite: "auto"
-            });
-            
-            gsap.to(modelGroup.rotation, {
-                x: targetState.rotation.x,
-                y: targetState.rotation.y,
-                z: targetState.rotation.z,
-                duration: 1.5,
-                ease: "power3.out",
-                overwrite: "auto"
-            });
+
+    // ============================================
+    // MOUSE INTERACTION — PARALLAX
+    // ============================================
+    const mouseTarget  = { x: 0, y: 0 };
+    const mouseCurrent = { x: 0, y: 0 };
+    const MOUSE_LERP   = 0.06;  // Smooth lerp factor
+    const MOUSE_RANGE  = 0.3;   // Max rotation range in radians
+
+    window.addEventListener('mousemove', (e) => {
+        // Normalize mouse to -1..1
+        mouseTarget.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouseTarget.y = (e.clientY / window.innerHeight) * 2 - 1;
+    });
+
+
+    // ============================================
+    // ANIMATION LOOP
+    // ============================================
+    const idleTime = { value: 0 };
+
+    const animate = () => {
+        requestAnimationFrame(animate);
+
+        const delta = clock.getDelta();
+        idleTime.value += delta;
+
+        // Update embedded animations
+        if (mixer) {
+            mixer.update(delta);
         }
-    }
-});
 
-// 6. Animation Loop (Idle Motion)
-const baseIdleTime = { value: 0 };
+        if (model) {
+            // ─── Base Idle: Slow continuous Y rotation ───
+            model.rotation.y += 0.003;
 
-const animate = () => {
-    requestAnimationFrame(animate);
-    
-    const delta = clock.getDelta();
-    baseIdleTime.value += delta;
-    
-    if (mixer) {
-        mixer.update(delta);
-    }
-    
-    if (model) {
-        // Base idle continuous rotation (applied to model, not the animating group)
-        model.rotation.y += 0.002;
-        
-        // Base idle floating motion (up/down using sine wave)
-        model.position.y += Math.sin(baseIdleTime.value * 2.0) * 0.002;
-    }
-    
-    renderer.render(scene, camera);
-};
+            // ─── Base Idle: Floating sine wave ───
+            model.position.y += Math.sin(idleTime.value * 1.5) * 0.001;
+        }
 
-// Start the animation loop
-animate();
+        // ─── Mouse Parallax (smooth lerp) ───
+        mouseCurrent.x += (mouseTarget.x - mouseCurrent.x) * MOUSE_LERP;
+        mouseCurrent.y += (mouseTarget.y - mouseCurrent.y) * MOUSE_LERP;
 
-// 7. Responsiveness
-const handleResize = () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    
-    // Adjust model scale for mobile devices to prevent it from dominating the screen
-    if (window.innerWidth < 768) {
-        modelGroup.scale.set(0.6, 0.6, 0.6);
-    } else {
-        modelGroup.scale.set(1, 1, 1);
-    }
-};
+        if (modelGroup && modelGroup.visible) {
+            // Apply mouse rotation offset to the model group
+            // These are additive to the GSAP-driven base rotation
+            modelGroup.rotation.x += (mouseCurrent.y * MOUSE_RANGE - modelGroup.rotation.x) * 0.01;
+            // Y axis mouse is handled via a slight offset — we don't overwrite GSAP
+            // Instead we animate a subtle position shift
+        }
 
-window.addEventListener('resize', handleResize);
-// Run once on load to set initial scale
-handleResize();
+        // ─── Animate accent lights subtly ───
+        const lightTime = idleTime.value * 0.5;
+        bluePoint.position.x  = -4 + Math.sin(lightTime) * 0.5;
+        bluePoint.position.y  = 3 + Math.cos(lightTime * 0.8) * 0.3;
+        purplePoint.position.x = 4 + Math.cos(lightTime * 0.7) * 0.5;
+        purplePoint.position.y = -2 + Math.sin(lightTime * 0.9) * 0.3;
+
+        renderer.render(scene, camera);
+    };
+
+    animate();
+
+
+    // ============================================
+    // RESPONSIVENESS
+    // ============================================
+    const handleResize = () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        // Adjust scale for mobile
+        if (window.innerWidth < 768) {
+            modelGroup.scale.set(0.6, 0.6, 0.6);
+        } else if (window.innerWidth < 1024) {
+            modelGroup.scale.set(0.8, 0.8, 0.8);
+        } else {
+            modelGroup.scale.set(1, 1, 1);
+        }
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+})();

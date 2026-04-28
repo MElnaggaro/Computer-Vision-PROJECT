@@ -1,3 +1,7 @@
+/* ============================================
+   DESIGN SYSTEM — SMART CLASSROOM ASSISTANT
+   ============================================ */
+
 :root {
     --bg-base: #050505;
     --text-primary: #ffffff;
@@ -12,6 +16,7 @@
     
     --font-heading: 'Space Grotesk', sans-serif;
     --font-body: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 }
 
 * {
@@ -30,7 +35,128 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* Three.js Container */
+/* Prevent scroll while intro is active */
+body.intro-active {
+    overflow: hidden;
+}
+
+
+/* ============================================
+   CINEMATIC INTRO OVERLAY
+   ============================================ */
+#intro-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #050505;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Intro particles canvas */
+#intro-particles {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Scanline overlay effect */
+.intro-scanlines {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(255, 255, 255, 0.008) 2px,
+        rgba(255, 255, 255, 0.008) 4px
+    );
+}
+
+/* Intro content wrapper */
+#intro-content {
+    position: relative;
+    z-index: 3;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+}
+
+/* Loader container */
+#intro-loader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+}
+
+/* Spinning ring loader */
+.intro-spinner {
+    width: 60px;
+    height: 60px;
+    border: 2px solid rgba(79, 70, 229, 0.15);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spinLoader 1.2s linear infinite;
+}
+
+@keyframes spinLoader {
+    to { transform: rotate(360deg); }
+}
+
+/* Status text (loading / ready) */
+#intro-status {
+    font-family: var(--font-mono);
+    font-size: clamp(0.8rem, 2vw, 1rem);
+    letter-spacing: 0.25em;
+    color: rgba(255, 255, 255, 0.6);
+    text-transform: uppercase;
+}
+
+/* Ready state pulsing glow */
+#intro-status.ready {
+    color: var(--accent-blue);
+    animation: pulseReady 1.8s ease-in-out infinite;
+    cursor: pointer;
+}
+
+@keyframes pulseReady {
+    0%, 100% { opacity: 0.7; text-shadow: 0 0 10px rgba(79, 70, 229, 0.3); }
+    50%      { opacity: 1;   text-shadow: 0 0 25px rgba(79, 70, 229, 0.6); }
+}
+
+/* Title (hidden initially, revealed by GSAP) */
+#intro-title {
+    font-family: var(--font-heading);
+    font-size: clamp(1.6rem, 5vw, 3.6rem);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-primary);
+    opacity: 0;
+    transform: translateY(40px);
+    text-shadow: 0 0 40px rgba(79, 70, 229, 0.3);
+}
+
+
+/* ============================================
+   THREE.JS CONTAINER
+   ============================================ */
 #three-container {
     position: fixed;
     top: 0;
@@ -41,7 +167,9 @@ body {
     pointer-events: none;
 }
 
-/* Canvas Background */
+/* ============================================
+   CANVAS BACKGROUND (PARTICLES)
+   ============================================ */
 #bg-canvas {
     position: fixed;
     top: 0;
@@ -53,7 +181,9 @@ body {
     opacity: 0.6;
 }
 
-/* Custom Cursor */
+/* ============================================
+   CUSTOM CURSOR
+   ============================================ */
 .cursor-dot,
 .cursor-outline {
     position: fixed;
@@ -90,7 +220,9 @@ body {
     backdrop-filter: blur(2px);
 }
 
-/* Main Layout */
+/* ============================================
+   MAIN LAYOUT
+   ============================================ */
 #smooth-wrapper {
     position: relative;
     z-index: 2; /* Above canvas */
@@ -101,7 +233,9 @@ body {
     will-change: transform;
 }
 
-/* Utilities */
+/* ============================================
+   UTILITIES
+   ============================================ */
 .glass-panel {
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
@@ -120,7 +254,9 @@ body {
     display: inline-block;
 }
 
-/* Buttons */
+/* ============================================
+   BUTTONS
+   ============================================ */
 .btn {
     display: inline-flex;
     align-items: center;
@@ -162,7 +298,9 @@ body {
     font-size: 1.1rem;
 }
 
-/* Section Common */
+/* ============================================
+   SECTION COMMON
+   ============================================ */
 section {
     padding: 120px 5%;
     max-width: 1400px;
@@ -190,7 +328,9 @@ section {
     margin: 0 auto;
 }
 
-/* Hero Section */
+/* ============================================
+   HERO SECTION
+   ============================================ */
 .hero {
     min-height: 100vh;
     display: flex;
@@ -282,7 +422,9 @@ section {
     100% { transform: translate(-50%, 12px); opacity: 0; }
 }
 
-/* Features Section */
+/* ============================================
+   FEATURES SECTION
+   ============================================ */
 .features-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -344,7 +486,9 @@ section {
     opacity: 1;
 }
 
-/* Workflow Section */
+/* ============================================
+   WORKFLOW SECTION
+   ============================================ */
 .workflow-container {
     padding: 60px 0;
     overflow-x: auto;
@@ -435,7 +579,9 @@ section {
     opacity: 0;
 }
 
-/* Impact Section */
+/* ============================================
+   IMPACT SECTION
+   ============================================ */
 .impact {
     padding: 100px 5%;
 }
@@ -489,7 +635,9 @@ section {
     line-height: 1.6;
 }
 
-/* CTA Section */
+/* ============================================
+   CTA / FINAL SECTION
+   ============================================ */
 .cta {
     text-align: center;
     padding-bottom: 120px;
@@ -515,7 +663,9 @@ section {
     font-size: 1.1rem;
 }
 
-/* Footer */
+/* ============================================
+   FOOTER
+   ============================================ */
 .footer {
     padding: 40px 5%;
     display: flex;
@@ -541,6 +691,9 @@ section {
     color: var(--text-primary);
 }
 
+/* ============================================
+   RESPONSIVE
+   ============================================ */
 @media (max-width: 768px) {
     .hero-actions {
         flex-direction: column;
