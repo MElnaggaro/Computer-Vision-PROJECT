@@ -193,7 +193,7 @@
     };
 
     loader.load(
-        'model/aiu 3d.glb',
+        'model/aiu%203d.glb',
         (gltf) => {
             aiuModel = gltf.scene;
 
