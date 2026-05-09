@@ -124,7 +124,7 @@ class TestFaceRecognizer:
         assert len(results) == 1
         assert results[0]["name"] == "Mohammed_Ayman"
         assert results[0]["known"] is True
-        assert results[0]["confidence"] == 1.0
+        assert results[0]["similarity"] == 1.0
         assert results[0]["location"] == (50, 200, 200, 50)
 
     @patch("app.services.vision.face_recognizer.fr_lib")
@@ -149,7 +149,7 @@ class TestFaceRecognizer:
         assert len(results) == 1
         assert results[0]["name"] == "Unknown"
         assert results[0]["known"] is False
-        assert results[0]["confidence"] < 0.5
+        assert results[0]["similarity"] < 0.5
 
     @patch("app.services.vision.face_recognizer.fr_lib")
     def test_multiple_faces_mixed(self, mock_fr: MagicMock) -> None:

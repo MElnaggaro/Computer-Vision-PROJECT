@@ -186,12 +186,15 @@ class EncodingManager:
     # ── Internal helpers ─────────────────────────────────────────────
 
     def _encode_image(self, image_path: Path) -> Optional[np.ndarray]:
-        """Load an image and return its first face encoding, or ``None``.
+        """Load an image, validate quality, and return its first face encoding, or ``None``.
 
-        Uses ``num_jitters=3`` to re‑sample the face multiple times and
-        average the result, producing more accurate encodings at the cost
-        of slightly longer build time (~3× slower per image, but only
-        runs once).
+        Validation checks:
+            1. Image is not blurry (Laplacian variance > threshold).
+            2. Exactly ONE face is detected.
+            3. Face resolution is large enough.
+
+        Uses ``num_jitters=settings.NUM_JITTERS`` to re‑sample the face multiple times and
+        average the result, producing more accurate encodings.
         """
         # Use cv2 to read → convert to RGB (face_recognition expects RGB)
         img_bgr = cv2.imread(str(image_path))
@@ -199,8 +202,35 @@ class EncodingManager:
             logger.error("Could not read image: %s", image_path)
             return None
 
+        # 1. Blur detection
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+        if variance < settings.MIN_FACE_SHARPNESS:
+            logger.warning("Skipped %s: Image too blurry (variance: %.2f)", image_path.name, variance)
+            return None
+
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        encodings = fr_lib.face_encodings(img_rgb, num_jitters=3)
+        
+        # Detect faces first to validate
+        locations = fr_lib.face_locations(img_rgb, model=self.model)
+        
+        # 2. Exactly one face
+        if len(locations) == 0:
+            logger.warning("Skipped %s: No faces found", image_path.name)
+            return None
+        if len(locations) > 1:
+            logger.warning("Skipped %s: Multiple faces found (%d)", image_path.name, len(locations))
+            return None
+
+        # 3. Face size validation
+        top, right, bottom, left = locations[0]
+        face_w = right - left
+        face_h = bottom - top
+        if face_w < settings.MIN_FACE_SIZE or face_h < settings.MIN_FACE_SIZE:
+            logger.warning("Skipped %s: Face too small (%dx%d)", image_path.name, face_w, face_h)
+            return None
+
+        encodings = fr_lib.face_encodings(img_rgb, known_face_locations=locations, num_jitters=settings.NUM_JITTERS)
 
         if not encodings:
             return None
@@ -216,3 +246,4 @@ class EncodingManager:
         with open(self.encodings_file, "wb") as fh:
             pickle.dump(data, fh, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info("Saved %d encodings to %s", len(self._encodings), self.encodings_file)
+

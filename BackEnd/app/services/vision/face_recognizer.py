@@ -72,7 +72,7 @@ class FaceRecognizer:
 
         Returns:
             List of result dicts, one per face:
-            ``{"name": str, "known": bool, "confidence": float, "location": tuple}``
+            ``{"name": str, "known": bool, "similarity": float, "distance": float, "location": tuple}``
         """
         if not self.encoding_manager.is_loaded:
             logger.warning("No encodings loaded – all faces will be Unknown.")
@@ -110,7 +110,7 @@ class FaceRecognizer:
         known_names = self.encoding_manager.names
 
         if not known_encodings:
-            return self._unknown_result(location, confidence=0.0)
+            return self._unknown_result(location, distance=1.0, similarity=0.0)
 
         distances: np.ndarray = fr_lib.face_distance(known_encodings, encoding)
 
@@ -131,28 +131,29 @@ class FaceRecognizer:
                 best_avg = avg_dist
                 best_name = name
 
-        confidence: float = self._distance_to_confidence(best_avg)
+        similarity: float = self._distance_to_similarity(best_avg)
 
         if best_name is not None and best_avg <= self.tolerance:
             return {
                 "name": best_name,
                 "known": True,
-                "confidence": confidence,
+                "similarity": similarity,
+                "distance": best_avg,
                 "location": location,
             }
 
-        return self._unknown_result(location, confidence)
+        return self._unknown_result(location, best_avg, similarity)
 
-    def _distance_to_confidence(self, distance: float) -> float:
-        """Convert face distance to an intuitive confidence percentage.
+    def _distance_to_similarity(self, distance: float) -> float:
+        """Convert face distance to an intuitive similarity percentage.
 
-        The raw ``1.0 − distance`` formula under‑reports confidence for
+        The raw ``1.0 − distance`` formula under‑reports similarity for
         correct matches (a real person at distance 0.35 shows only 65%).
 
         This mapping uses **non‑linear scaling** so that distances well
         within tolerance produce the high scores humans expect:
 
-            distance │ confidence
+            distance │ similarity
             ─────────┼───────────
               0.00   │  100 %
               0.10   │   97 %
@@ -180,12 +181,14 @@ class FaceRecognizer:
     @staticmethod
     def _unknown_result(
         location: FaceLocation,
-        confidence: float,
+        distance: float,
+        similarity: float,
     ) -> RecognitionResult:
         """Build a standard result dict for an unrecognised face."""
         return {
             "name": "Unknown",
             "known": False,
-            "confidence": round(confidence, 4),
+            "similarity": round(similarity, 4),
+            "distance": round(distance, 4),
             "location": location,
         }

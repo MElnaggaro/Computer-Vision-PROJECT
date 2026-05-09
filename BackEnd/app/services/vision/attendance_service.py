@@ -43,14 +43,14 @@ class AttendanceService:
         self,
         name: str,
         known: bool,
-        confidence: float,
+        similarity: float,
     ) -> Optional[AttendanceRecord]:
         """Record a student's attendance if not already marked.
 
         Args:
             name:       Student name or ``"Unknown"``.
             known:      Whether the student was recognised.
-            confidence: Recognition confidence (0–1).
+            similarity: Recognition similarity (0–1).
 
         Returns:
             The ``AttendanceRecord`` dict if newly marked, or ``None``
@@ -66,7 +66,7 @@ class AttendanceService:
             "attendance": "Present" if known else "Not Registered",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "known": known,
-            "confidence": round(confidence, 4),
+            "similarity": round(similarity, 4),
         }
 
         if known:
@@ -74,10 +74,10 @@ class AttendanceService:
 
         self._records.append(record)
         logger.info(
-            "Attendance marked: %s (%s, confidence=%.4f)",
+            "Attendance marked: %s (%s, similarity=%.4f)",
             name,
             record["attendance"],
-            confidence,
+            similarity,
         )
         return record
 

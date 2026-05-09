@@ -153,12 +153,15 @@ class TestClassroomCamera:
         mock_recognition_fr.face_encodings.return_value = [_make_fake_encoding(seed=1)]
         mock_recognition_fr.face_distance.return_value = np.array([0.1])
 
-        annotated, results = camera.process_frame(frame)
+        # Simulate 12 consecutive frames to trigger tracking stability
+        for _ in range(20):
+            annotated, results = camera.process_frame(frame)
 
         # Recognition worked
         assert len(results) == 1
         assert results[0]["name"] == "Mohammed_Ayman"
         assert results[0]["known"] is True
+        assert results[0].get("stable") is True
 
         # Attendance was marked
         assert camera.attendance_service.already_marked("Mohammed_Ayman")
@@ -188,11 +191,13 @@ class TestClassroomCamera:
         mock_recognition_fr.face_encodings.return_value = [_make_fake_encoding(seed=99)]
         mock_recognition_fr.face_distance.return_value = np.array([0.85])
 
-        annotated, results = camera.process_frame(frame)
+        for _ in range(20):
+            annotated, results = camera.process_frame(frame)
 
         assert len(results) == 1
         assert results[0]["name"] == "Unknown"
         assert results[0]["known"] is False
+        assert results[0].get("stable") is True
 
     @patch("app.services.vision.face_recognizer.fr_lib")
     @patch("app.services.vision.face_detection.fr_lib")
@@ -265,7 +270,8 @@ class TestClassroomCamera:
         mock_recognition_fr.face_encodings.return_value = [_make_fake_encoding(seed=3)]
         mock_recognition_fr.face_distance.return_value = np.array([0.15])
 
-        camera.process_frame(frame)
+        for _ in range(20):
+            camera.process_frame(frame)
         log_path = camera.attendance_service.save_log()
 
         assert log_path.exists()
@@ -277,7 +283,7 @@ class TestClassroomCamera:
         assert data[0]["attendance"] == "Present"
         assert data[0]["known"] is True
         assert "timestamp" in data[0]
-        assert "confidence" in data[0]
+        assert "similarity" in data[0]
 
     @patch("app.services.vision.face_recognizer.fr_lib")
     @patch("app.services.vision.face_detection.fr_lib")
@@ -300,15 +306,18 @@ class TestClassroomCamera:
         mock_recognition_fr.face_distance.return_value = np.array([0.08])
 
         # First marking
-        camera.process_frame(frame)
+        for _ in range(20):
+            camera.process_frame(frame)
         assert camera.attendance_service.already_marked("Menna_Abdo")
 
         # Reset
         camera.attendance_service.reset_session()
+        camera.face_tracker.reset()
         assert not camera.attendance_service.already_marked("Menna_Abdo")
 
         # Can be marked again
-        camera.process_frame(frame)
+        for _ in range(20):
+            camera.process_frame(frame)
         assert camera.attendance_service.already_marked("Menna_Abdo")
 
     def test_draw_annotations_known(self) -> None:
@@ -317,8 +326,9 @@ class TestClassroomCamera:
         results = [{
             "name": "Test_Student",
             "known": True,
-            "confidence": 0.92,
+            "similarity": 0.92,
             "location": (50, 200, 200, 50),
+            "stable": True,
         }]
 
         annotated = ClassroomCamera._draw_annotations(frame.copy(), results)
@@ -334,8 +344,9 @@ class TestClassroomCamera:
         results = [{
             "name": "Unknown",
             "known": False,
-            "confidence": 0.18,
+            "similarity": 0.18,
             "location": (50, 200, 200, 50),
+            "stable": True,
         }]
 
         annotated = ClassroomCamera._draw_annotations(frame.copy(), results)

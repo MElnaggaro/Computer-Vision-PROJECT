@@ -41,6 +41,7 @@ from app.services.vision.attendance_service import AttendanceService
 from app.services.vision.encoding_manager import EncodingManager
 from app.services.vision.face_detection import FaceDetector
 from app.services.vision.face_recognizer import FaceRecognizer, RecognitionResult
+from app.services.vision.face_tracker import FaceTracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +52,7 @@ logger = logging.getLogger(__name__)
 # ── Drawing constants ────────────────────────────────────────────────
 _COLOR_KNOWN = (0, 200, 0)        # green
 _COLOR_UNKNOWN = (0, 0, 230)      # red
+_COLOR_UNSTABLE = (0, 165, 255)   # orange (tracking, not yet stable)
 _COLOR_TEXT_BG = (30, 30, 30)     # dark overlay
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _FONT_SCALE = 0.6
@@ -58,7 +60,7 @@ _THICKNESS = 2
 
 
 class ClassroomCamera:
-    """Encapsulates the live webcam → recognition → attendance loop.
+    """Encapsulates the live webcam → recognition → tracker → attendance loop.
 
     Can be used interactively (``run()``) or programmatically (single‑frame
     processing via ``process_frame()``).
@@ -78,6 +80,7 @@ class ClassroomCamera:
         self.face_recognizer = FaceRecognizer(
             encoding_manager=self.encoding_manager,
         )
+        self.face_tracker = FaceTracker()
         self.attendance_service = attendance_service or AttendanceService()
 
     # ── Public API ───────────────────────────────────────────────────
@@ -108,33 +111,43 @@ class ClassroomCamera:
 
     def process_frame(
         self, frame: np.ndarray
-    ) -> Tuple[np.ndarray, List[RecognitionResult]]:
-        """Run detection → recognition → attendance on a single frame.
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+        """Run detection → recognition → tracking → attendance on a single frame.
 
         Args:
             frame: BGR image from ``cv2.VideoCapture``.
 
         Returns:
-            ``(annotated_frame, results)`` where ``annotated_frame`` has
+            ``(annotated_frame, stable_results)`` where ``annotated_frame`` has
             bounding boxes and labels drawn on it.
         """
-        locations = self.face_detector.detect_faces(frame)
-        results = (
-            self.face_recognizer.recognize_faces(frame, locations)
+        # Preprocessing: Apply CLAHE for lighting robustness
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
+        enhanced_frame = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
+
+        locations = self.face_detector.detect_faces(enhanced_frame)
+        raw_results = (
+            self.face_recognizer.recognize_faces(enhanced_frame, locations)
             if locations
             else []
         )
 
-        # Mark attendance for each recognised face
-        for result in results:
-            self.attendance_service.mark_attendance(
-                name=result["name"],
-                known=result["known"],
-                confidence=result["confidence"],
-            )
+        stable_results = self.face_tracker.update(raw_results)
 
-        annotated = self._draw_annotations(frame.copy(), results)
-        return annotated, results
+        # Mark attendance for each recognised stable face
+        for result in stable_results:
+            if result.get("attendance_ready") and result.get("known"):
+                self.attendance_service.mark_attendance(
+                    name=result["name"],
+                    known=result["known"],
+                    similarity=result.get("similarity", 0.0),
+                )
+
+        annotated = self._draw_annotations(frame.copy(), stable_results)
+        return annotated, stable_results
 
     def run(self) -> None:
         """Open the webcam and run the interactive attendance loop.
@@ -212,7 +225,8 @@ class ClassroomCamera:
                     break
                 elif key == ord("r") or key == ord("R"):
                     self.attendance_service.reset_session()
-                    logger.info("Session reset — you can re‑mark everyone.")
+                    self.face_tracker.reset()
+                    logger.info("Session and tracker reset — you can re‑mark everyone.")
                 elif key == ord("b") or key == ord("B"):
                     logger.info("Rebuilding encodings …")
                     try:
@@ -235,11 +249,11 @@ class ClassroomCamera:
     @staticmethod
     def _draw_annotations(
         frame: np.ndarray,
-        results: List[RecognitionResult],
+        results: List[Dict[str, Any]],
     ) -> np.ndarray:
         """Draw bounding boxes and labels on the frame.
 
-        Known students → green box, Unknown → red box.
+        Stable Known → green, Stable Unknown → red, Unstable → orange.
         """
         for result in results:
             location = result.get("location")
@@ -247,17 +261,22 @@ class ClassroomCamera:
                 continue
 
             top, right, bottom, left = location
-            name = result["name"]
-            confidence = result["confidence"]
-            known = result["known"]
+            name = result.get("name", "Unknown")
+            similarity = result.get("similarity", 0.0)
+            known = result.get("known", False)
+            stable = result.get("stable", False)
 
-            color = _COLOR_KNOWN if known else _COLOR_UNKNOWN
+            if stable:
+                color = _COLOR_KNOWN if known else _COLOR_UNKNOWN
+                label = f"{name} ({similarity:.0%})"
+            else:
+                color = _COLOR_UNSTABLE
+                label = f"Detecting... ({similarity:.0%})"
 
             # Bounding box
             cv2.rectangle(frame, (left, top), (right, bottom), color, _THICKNESS)
 
             # Label background
-            label = f"{name} ({confidence:.0%})"
             (text_w, text_h), baseline = cv2.getTextSize(
                 label, _FONT, _FONT_SCALE, 1
             )
