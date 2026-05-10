@@ -1,0 +1,11 @@
+[
+  {
+    "event": "attendance",
+    "student": "Mohammed_Ayman",
+    "attendance": "Present",
+    "timestamp": "2026-05-10T04:03:24.379122+00:00",
+    "registered": true,
+    "emotion": "Sad",
+    "emotion_confidence": 0.7249
+  }
+]

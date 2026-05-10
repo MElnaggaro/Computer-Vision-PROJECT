@@ -1,27 +1,34 @@
-from sklearn.feature_extraction.text import TfidfVectorizer
- 
-from app.services.nlp.Text_Preprocessing import clean_text
- 
- 
-def build_tfidf_vectorizer(
-    max_features: int = 10_000,
-    ngram_range: tuple = (1, 2),
-    sublinear_tf: bool = True,
-) -> TfidfVectorizer:
+from sklearn.base import BaseEstimator, TransformerMixin
+import logging
 
-    #Return a TfidfVectorizer configured to use clean_text as its analyser.
- 
-        #max_features:  Vocabulary capacity.
-        #ngram_range:   Unigram + bigram by default.
-        #sublinear_tf:  Apply log(1 + tf) scaling for better signal on long texts.
- 
+logger = logging.getLogger(__name__)
 
-    return TfidfVectorizer(
-        analyzer="word",
-        preprocessor=clean_text,
-        tokenizer=str.split,
-        token_pattern=None,
-        max_features=max_features,
-        ngram_range=ngram_range,
-        sublinear_tf=sublinear_tf,
-    )
+class SentenceTransformerExtractor(BaseEstimator, TransformerMixin):
+    """
+    Extracts semantic text embeddings using sentence-transformers.
+    """
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        self.model_name = model_name
+        self.model_ = None
+
+    def fit(self, X, y=None):
+        if self.model_ is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                logger.info(f"[NLP] Loading SentenceTransformer: {self.model_name}")
+                self.model_ = SentenceTransformer(self.model_name)
+            except ImportError:
+                raise ImportError("Please install sentence-transformers: pip install sentence-transformers")
+        return self
+
+    def transform(self, X):
+        if self.model_ is None:
+            self.fit(X)
+        # Return numpy array of embeddings
+        return self.model_.encode(X, show_progress_bar=False)
+
+def build_feature_extractor(model_name="all-MiniLM-L6-v2") -> SentenceTransformerExtractor:
+    """
+    Return a scikit-learn compatible transformer for semantic embeddings.
+    """
+    return SentenceTransformerExtractor(model_name=model_name)

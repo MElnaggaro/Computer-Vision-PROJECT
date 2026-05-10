@@ -1,32 +1,35 @@
 """
-Webcam Runner — Standalone Live Camera Test
-============================================
-A fully self‑contained script that opens the webcam, runs the full
-face‑recognition + emotion‑detection + attendance pipeline in real time,
-and draws annotated bounding boxes on each frame.
+Webcam Runner — Smart Classroom Live Camera
+=============================================
+Full pipeline: face detection → recognition → emotion → attendance
+              + push-to-talk speech → NLP question classification.
 
-Usage (from the BackEnd/ directory):
+Usage (from the BackEnd/ directory)::
+
     python -m app.services.vision.webcam_runner
     python app/services/vision/webcam_runner.py
 
-Controls:
+Controls::
+
     Q  — quit
-    R  — reset attendance session (re‑mark everyone)
+    R  — reset attendance session (re-mark everyone)
     B  — rebuild encodings from data/students_faces/
+    M  — ask one question (push-to-talk: records → transcribes → classifies)
 
 Design notes:
-    • This script is intentionally importable so that ``test_live_camera.py``
-      can reuse the ``ClassroomCamera`` class in a non‑interactive way.
-    • All services are instantiated locally (no FastAPI dependency).
-    • Emotion detection runs on a throttled schedule (every N recognition
-      frames) and is smoothed via :class:`EmotionTracker` to avoid flicker.
+    • Speech runs in a background thread to avoid freezing the webcam loop.
+    • M key triggers a single question cycle (record → stop → process).
+    • The ``ClassroomCamera`` class is importable for non-interactive testing.
+    • Emotion detection runs on a throttled schedule with temporal smoothing.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,15 +61,28 @@ _COLOR_UNKNOWN   = (0, 0, 230)       # red
 _COLOR_UNSTABLE  = (0, 165, 255)     # orange (tracking, not yet stable)
 _COLOR_TEXT_BG   = (30, 30, 30)      # dark overlay
 _COLOR_EMOTION   = (255, 220, 60)    # yellow for emotion label
+_COLOR_QUESTION  = (100, 255, 100)   # light green for question overlay
+_COLOR_MIC       = (0, 100, 255)     # orange-red for mic indicator
 _FONT            = cv2.FONT_HERSHEY_SIMPLEX
 _FONT_SCALE      = 0.6
 _THICKNESS       = 2
 
 
-class ClassroomCamera:
-    """Encapsulates the live webcam → recognition → emotion → attendance loop.
+# ── Mic state machine ───────────────────────────────────────────────
 
-    Can be used interactively (``run()``) or programmatically (single‑frame
+
+class MicState(Enum):
+    """State machine for push-to-talk microphone."""
+    IDLE = auto()        # not recording
+    RECORDING = auto()   # mic is active (background thread)
+    PROCESSING = auto()  # speech/NLP running
+
+
+class ClassroomCamera:
+    """Encapsulates the live webcam → recognition → emotion → attendance loop,
+    plus push-to-talk speech → NLP question classification.
+
+    Can be used interactively (``run()``) or programmatically (single-frame
     processing via ``process_frame()``).
 
     Args:
@@ -76,6 +92,7 @@ class ClassroomCamera:
         emotion_tracker:    Pre-built emotion tracker (for dependency injection).
                             Pass ``None`` to disable emotion detection entirely.
         enable_emotion:     Master switch for emotion detection (default ``True``).
+        enable_speech:      Master switch for speech/NLP (default ``True``).
     """
 
     def __init__(
@@ -85,9 +102,11 @@ class ClassroomCamera:
         attendance_service: Optional[AttendanceService] = None,
         emotion_tracker: Optional[EmotionTracker] = None,
         enable_emotion: bool = True,
+        enable_speech: bool = True,
     ) -> None:
         self.camera_index = camera_index
         self.enable_emotion = enable_emotion
+        self.enable_speech = enable_speech
 
         # ── Services ─────────────────────────────────────────────────
         self.encoding_manager = encoding_manager or EncodingManager()
@@ -111,10 +130,29 @@ class ClassroomCamera:
         else:
             self.emotion_tracker = None
 
+        # ── Speech / NLP (lazy import to avoid loading if disabled) ──
+        self._question_pipeline = None
+        self._mic_state = MicState.IDLE
+        self._mic_thread: Optional[threading.Thread] = None
+        self._last_question_result: Optional[Dict[str, Any]] = None
+        self._question_display_time: float = 0.0  # timestamp when question was received
+        self._question_display_duration: float = 8.0  # seconds to show on overlay
+
         # ── Optimisation variables ───────────────────────────────────
         self.frame_count = 0
         self.frame_skip = 3
         self.trackers: List[Tuple[Any, Dict[str, Any]]] = []
+
+    def _get_question_pipeline(self):
+        """Lazy-load the QuestionPipeline to avoid heavy imports at startup."""
+        if self._question_pipeline is None:
+            from app.services.orchestrator.question_pipeline import QuestionPipeline
+            self._question_pipeline = QuestionPipeline(
+                language="en-US",
+                timeout=5,
+                phrase_time_limit=10,
+            )
+        return self._question_pipeline
 
     def _create_tracker(self) -> Optional[Any]:
         """Create an OpenCV object tracker, falling back to MIL if KCF unavailable."""
@@ -191,10 +229,15 @@ class ClassroomCamera:
                 else []
             )
 
-            # Scale locations back up to original frame size
+            # Scale locations back up to original frame size and clamp
+            fh, fw = enhanced_frame.shape[:2]
             for res in raw_results:
                 t, r, bv, left = res["location"]
-                res["location"] = (t * 4, r * 4, bv * 4, left * 4)
+                t_scaled = max(0, min(t * 4, fh - 1))
+                r_scaled = max(0, min(r * 4, fw - 1))
+                bv_scaled = max(0, min(bv * 4, fh - 1))
+                left_scaled = max(0, min(left * 4, fw - 1))
+                res["location"] = (t_scaled, r_scaled, bv_scaled, left_scaled)
 
             # Re-initialize object trackers
             self.trackers = []
@@ -202,9 +245,14 @@ class ClassroomCamera:
                 tracker = self._create_tracker()
                 if tracker is not None:
                     t, r, bv, left = res["location"]
-                    bbox = (left, t, r - left, bv - t)
-                    tracker.init(enhanced_frame, bbox)
-                    self.trackers.append((tracker, dict(res)))
+                    w, h = r - left, bv - t
+                    if w > 0 and h > 0:
+                        bbox = (left, t, w, h)
+                        try:
+                            tracker.init(enhanced_frame, bbox)
+                            self.trackers.append((tracker, dict(res)))
+                        except Exception as exc:
+                            logger.debug("Tracker initialization failed: %s", exc)
 
             tracking_results = raw_results
         else:
@@ -266,10 +314,100 @@ class ClassroomCamera:
         annotated = self._draw_annotations(frame.copy(), stable_results)
         return annotated, stable_results
 
+    # ── Push-to-Talk ─────────────────────────────────────────────────
+
+    def _start_question_recording(self, stable_results: List[Dict[str, Any]]) -> None:
+        """Start a background thread to record and process one question.
+
+        The thread: records mic → transcribes → classifies topic → stores result.
+        """
+        if self._mic_state != MicState.IDLE:
+            logger.debug("Mic not idle — ignoring M key.")
+            return
+
+        if not self.enable_speech:
+            logger.warning("Speech is disabled (--no-speech). Ignoring M key.")
+            return
+
+        # Determine which student is asking
+        active_student = self._find_active_student(stable_results)
+
+        self._mic_state = MicState.RECORDING
+        self._mic_thread = threading.Thread(
+            target=self._question_worker,
+            args=(active_student,),
+            daemon=True,
+        )
+        self._mic_thread.start()
+
+    def _find_active_student(self, stable_results: List[Dict[str, Any]]) -> str:
+        """Find the recognized student currently visible for question attribution."""
+        # Prefer stable, registered faces currently on screen
+        for result in stable_results:
+            if result.get("stable") and result.get("registered"):
+                return result["name"]
+
+        # Fall back to last known student from attendance
+        last = self.attendance_service.get_active_student()
+        if last:
+            return last
+
+        return "Unknown"
+
+    def _question_worker(self, student_name: str) -> None:
+        """Background thread: record → transcribe → classify → store.
+
+        This runs in a daemon thread so it doesn't block the webcam loop.
+        """
+        try:
+            pipeline = self._get_question_pipeline()
+
+            self._mic_state = MicState.RECORDING
+            result = pipeline.process_voice_question()
+
+            if result is None:
+                self._mic_state = MicState.IDLE
+                return
+
+            self._mic_state = MicState.PROCESSING
+
+            # Log the question
+            self.attendance_service.add_question(
+                student_name=student_name,
+                question=result["question"],
+                topic=result["topic"],
+                topic_confidence=result.get("topic_confidence", 0.0),
+            )
+            self.attendance_service.save_log()
+
+            # Store for overlay display
+            self._last_question_result = {
+                "student": student_name,
+                "question": result["question"],
+                "topic": result["topic"],
+                "topic_confidence": result.get("topic_confidence", 0.0),
+            }
+            self._question_display_time = time.time()
+
+            # Console output
+            print("\n" + "=" * 50)
+            print(f"  Student: {student_name}")
+            print(f"  Question: {result['question']}")
+            print(f"  Topic: {result['topic']} ({result.get('topic_confidence', 0):.0%})")
+            print("=" * 50)
+
+        except Exception as exc:
+            logger.error("Question worker failed: %s", exc, exc_info=True)
+        finally:
+            self._mic_state = MicState.IDLE
+
+    # ── Main loop ────────────────────────────────────────────────────
+
     def run(self) -> None:
         """Open the webcam and run the interactive attendance loop.
 
-        Press **Q** to quit, **R** to reset session, **B** to rebuild encodings.
+        Press **Q** to quit, **R** to reset session, **B** to rebuild encodings,
+        **M** to ask one question (push-to-talk).
         """
         # Ensure encodings are loaded exactly once at startup
         if not self.ensure_encodings():
@@ -291,14 +429,17 @@ class ClassroomCamera:
             if self.emotion_tracker is not None
             else "DISABLED"
         )
+        speech_status = "ENABLED (M=mic)" if self.enable_speech else "DISABLED"
         logger.info(
-            "Camera opened (emotion detection: %s). "
-            "Press Q to quit | R to reset session | B to rebuild encodings",
+            "Camera opened (emotion: %s, speech: %s). "
+            "Press Q=Quit | R=Reset | B=Rebuild | M=Ask Question",
             emotion_status,
+            speech_status,
         )
 
         fps_time = time.time()
         frame_count = 0
+        last_stable_results: List[Dict[str, Any]] = []
 
         try:
             while True:
@@ -308,6 +449,7 @@ class ClassroomCamera:
                     continue
 
                 annotated, results = self.process_frame(frame)
+                last_stable_results = results
 
                 # ── FPS overlay ──────────────────────────────────────
                 frame_count += 1
@@ -342,10 +484,36 @@ class ClassroomCamera:
                     1,
                 )
 
-                cv2.imshow("Smart Classroom — Face Recognition + Emotion", annotated)
+                # ── Controls help bar ────────────────────────────────
+                controls = "Q=Quit | R=Reset | B=Rebuild | M=Ask Question"
+                cv2.putText(
+                    annotated,
+                    controls,
+                    (10, annotated.shape[0] - 40),
+                    _FONT,
+                    0.45,
+                    (150, 150, 150),
+                    1,
+                )
 
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == ord("Q"):
+                # ── Mic state indicator ──────────────────────────────
+                if self._mic_state == MicState.RECORDING:
+                    self._draw_mic_indicator(annotated, "● RECORDING...", (0, 0, 255))
+                elif self._mic_state == MicState.PROCESSING:
+                    self._draw_mic_indicator(annotated, "⏳ PROCESSING...", (0, 165, 255))
+
+                # ── Question overlay (auto-fading) ───────────────────
+                if self._last_question_result is not None:
+                    elapsed_since_question = time.time() - self._question_display_time
+                    if elapsed_since_question < self._question_display_duration:
+                        self._draw_question_overlay(annotated, self._last_question_result)
+                    else:
+                        self._last_question_result = None
+
+                cv2.imshow("Smart Classroom — Face Recognition + Emotion + Speech", annotated)
+
+                key = cv2.waitKeyEx(1) & 0xFF
+                if key == ord("q") or key == ord("Q") or key == 27:  # Also accept ESC
                     logger.info("Quit requested.")
                     break
                 elif key == ord("r") or key == ord("R"):
@@ -353,7 +521,7 @@ class ClassroomCamera:
                     self.face_tracker.reset()
                     if self.emotion_tracker is not None:
                         self.emotion_tracker.reset()
-                    logger.info("Session and tracker reset — you can re‑mark everyone.")
+                    logger.info("Session and tracker reset — you can re-mark everyone.")
                 elif key == ord("b") or key == ord("B"):
                     logger.info("Rebuilding encodings …")
                     try:
@@ -361,6 +529,8 @@ class ClassroomCamera:
                         logger.info("Rebuild complete: %s", summary)
                     except Exception as exc:
                         logger.error("Rebuild failed: %s", exc)
+                elif key == ord("m") or key == ord("M"):
+                    self._start_question_recording(last_stable_results)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user.")
@@ -458,6 +628,94 @@ class ClassroomCamera:
 
         return frame
 
+    @staticmethod
+    def _draw_mic_indicator(
+        frame: np.ndarray, text: str, color: Tuple[int, int, int]
+    ) -> None:
+        """Draw a mic recording/processing indicator at the top-right."""
+        (tw, th), _ = cv2.getTextSize(text, _FONT, 0.7, 2)
+        x = frame.shape[1] - tw - 20
+        y = 30
+
+        # Background
+        cv2.rectangle(
+            frame,
+            (x - 8, y - th - 8),
+            (x + tw + 8, y + 8),
+            _COLOR_TEXT_BG,
+            cv2.FILLED,
+        )
+        # Border
+        cv2.rectangle(
+            frame,
+            (x - 8, y - th - 8),
+            (x + tw + 8, y + 8),
+            color,
+            2,
+        )
+        cv2.putText(frame, text, (x, y), _FONT, 0.7, color, 2)
+
+    @staticmethod
+    def _draw_question_overlay(
+        frame: np.ndarray, result: Dict[str, Any]
+    ) -> None:
+        """Draw a semi-transparent overlay showing the last question + topic."""
+        h, w = frame.shape[:2]
+
+        # Build text lines
+        student = result.get("student", "Unknown")
+        question = result.get("question", "")
+        topic = result.get("topic", "")
+        conf = result.get("topic_confidence", 0.0)
+
+        lines = [
+            f"Student: {student}",
+            f"Q: {question[:60]}{'...' if len(question) > 60 else ''}",
+            f"Topic: {topic} ({conf:.0%})",
+        ]
+
+        # Calculate box size
+        line_height = 28
+        padding = 12
+        box_h = len(lines) * line_height + padding * 2
+        box_w = 500
+        box_x = w - box_w - 20
+        box_y = 50
+
+        # Semi-transparent background
+        overlay = frame.copy()
+        cv2.rectangle(
+            overlay,
+            (box_x, box_y),
+            (box_x + box_w, box_y + box_h),
+            (20, 20, 20),
+            cv2.FILLED,
+        )
+        cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+
+        # Border
+        cv2.rectangle(
+            frame,
+            (box_x, box_y),
+            (box_x + box_w, box_y + box_h),
+            _COLOR_QUESTION,
+            2,
+        )
+
+        # Text
+        for i, line in enumerate(lines):
+            y_pos = box_y + padding + (i + 1) * line_height - 5
+            color = _COLOR_QUESTION if i == 0 else (255, 255, 255)
+            cv2.putText(
+                frame,
+                line,
+                (box_x + padding, y_pos),
+                _FONT,
+                0.55,
+                color,
+                1,
+            )
+
 
 # ── CLI entry point ──────────────────────────────────────────────────
 
@@ -466,7 +724,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Smart Classroom — Live Webcam Face Recognition + Emotion Detection",
+        description="Smart Classroom — Live Webcam Face Recognition + Emotion Detection + Speech",
     )
     parser.add_argument(
         "--camera",
@@ -477,22 +735,28 @@ def main() -> None:
     parser.add_argument(
         "--rebuild",
         action="store_true",
-        help="Force‑rebuild encodings before starting",
+        help="Force-rebuild encodings before starting",
     )
     parser.add_argument(
         "--no-emotion",
         action="store_true",
         help="Disable emotion detection (higher FPS)",
     )
+    parser.add_argument(
+        "--no-speech",
+        action="store_true",
+        help="Disable speech/NLP question pipeline",
+    )
     args = parser.parse_args()
 
     runner = ClassroomCamera(
         camera_index=args.camera,
         enable_emotion=not args.no_emotion,
+        enable_speech=not args.no_speech,
     )
 
     if args.rebuild:
-        logger.info("Force‑rebuilding encodings …")
+        logger.info("Force-rebuilding encodings …")
         try:
             summary = runner.encoding_manager.build_encodings()
             logger.info("Build complete: %s", summary)

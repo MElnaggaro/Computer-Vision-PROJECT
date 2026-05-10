@@ -125,7 +125,7 @@ class EncodingManager:
                 self.encodings_file,
             )
             return True
-        except (pickle.UnpicklingError, KeyError, EOFError) as exc:
+        except (pickle.UnpicklingError, KeyError, EOFError, ModuleNotFoundError) as exc:
             logger.error("Failed to load encoding cache: %s", exc)
             return False
 
