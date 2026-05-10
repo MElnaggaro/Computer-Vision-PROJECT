@@ -60,7 +60,7 @@ class TestMarkAttendance:
 
         assert record is not None
         assert record["student"] == "Unknown"
-        assert record["attendance"] == "Present"
+        assert record["attendance"] == "Not Registered"
         assert record["registered"] is False
         assert "similarity" not in record
 
@@ -158,7 +158,7 @@ class TestLogPersistence:
         assert data[0]["student"] == "Student_X"
         assert data[0]["attendance"] == "Present"
         assert data[1]["student"] == "Unknown"
-        assert data[1]["attendance"] == "Present"
+        assert data[1]["attendance"] == "Not Registered"
 
     def test_log_merges_with_existing(
         self, log_file: Path

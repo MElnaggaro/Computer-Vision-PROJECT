@@ -32,8 +32,13 @@ class Settings(BaseSettings):
     PENDING_STUDENTS_DIR: Path = _BACKEND_ROOT / "data" / "pending_students"
     ENCODINGS_DIR: Path = _BACKEND_ROOT / "data" / "encodings"
     ENCODINGS_FILE: Path = _BACKEND_ROOT / "data" / "encodings" / "face_encodings.pkl"
-    LOGS_DIR: Path = _BACKEND_ROOT / "app" / "logs"
-    ATTENDANCE_LOG_FILE: Path = _BACKEND_ROOT / "app" / "logs" / "classroom_log.json"
+    LOGS_DIR: Path = _BACKEND_ROOT / "logs"
+    ATTENDANCE_LOG_FILE: Path = _BACKEND_ROOT / "logs" / "classroom_log.json"
+
+    # ── NLP Paths ────────────────────────────────────────────────────
+    NLP_MODEL_DIR: Path = DATA_DIR / "nlp" / "trained" / "models"
+    NLP_MODEL_PATH: Path = NLP_MODEL_DIR / "nlp_pipeline.joblib"
+    NLP_DATASET_PATH: Path = DATA_DIR / "nlp" / "raw" / "dataset.csv"
 
     # ── Vision / face‑recognition settings ───────────────────────────
     FACE_RECOGNITION_MODEL: str = "hog"          # "hog" (CPU) or "cnn" (GPU)

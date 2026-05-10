@@ -172,7 +172,7 @@ class TestKnownStudentWithEmotion:
         assert record["attendance"] == "Present"
         assert record["registered"] is True
         assert "emotion" in record
-        assert "emotion_confidence" not in record
+        assert "emotion_confidence" in record
         assert "timestamp" in record
 
     @patch("app.services.vision.face_recognizer.fr_lib")
@@ -327,12 +327,12 @@ class TestLogSchemaWithEmotion:
         assert len(data) == 1
         record = data[0]
 
-        # Required fields (emotion_confidence removed)
-        required_fields = {"student", "attendance", "timestamp", "registered", "emotion"}
+        # Required fields (emotion_confidence now included in event-based schema)
+        required_fields = {"student", "attendance", "timestamp", "registered", "emotion", "emotion_confidence"}
         for field in required_fields:
             assert field in record, f"Missing field: {field}"
 
-        assert "emotion_confidence" not in record
+        assert record["emotion_confidence"] == 0.92
         assert record["student"] == "Test_Student"
         assert record["attendance"] == "Present"
         assert record["registered"] is True
@@ -351,7 +351,7 @@ class TestLogSchemaWithEmotion:
 
         assert record is not None
         assert record["emotion"] == "Happy"
-        assert "emotion_confidence" not in record
+        assert record["emotion_confidence"] == 0.92
 
     def test_attendance_service_mark_without_emotion(self, tmp_path: Path) -> None:
         """AttendanceService should work fine without emotion args (backward compat)."""
@@ -363,8 +363,8 @@ class TestLogSchemaWithEmotion:
         )
 
         assert record is not None
-        assert "emotion" not in record
-        assert "emotion_confidence" not in record
+        assert record["emotion"] == "Neutral"
+        assert record["emotion_confidence"] == 0.0
 
     def test_attendance_service_unknown_face_log(self, tmp_path: Path) -> None:
         """Unknown face log should follow the required schema."""
@@ -382,4 +382,4 @@ class TestLogSchemaWithEmotion:
         assert record["attendance"] == "Not Registered"
         assert record["registered"] is False
         assert record["emotion"] == "Neutral"
-        assert "emotion_confidence" not in record
+        assert record["emotion_confidence"] == 0.74
