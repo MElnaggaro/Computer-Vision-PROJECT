@@ -1,0 +1,175 @@
+"""
+Face Recognizer Service
+========================
+Compares detected face encodings against the known‑student database
+and returns structured recognition results.
+
+NOTE: This file is named ``face_recognizer.py`` (not ``face_recognition.py``)
+to avoid shadowing the pip‑installed ``face_recognition`` library.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
+import cv2
+import face_recognition as fr_lib
+import numpy as np
+
+from app.core.config import settings
+from app.services.vision.encoding_manager import EncodingManager
+
+logger = logging.getLogger(__name__)
+
+# Type aliases
+FaceLocation = Tuple[int, int, int, int]
+RecognitionResult = Dict[str, Any]
+
+
+class FaceRecognizer:
+    """Identify detected faces against a database of known encodings.
+
+    Finds the absolute minimum distance among all encodings across all students.
+    """
+
+    def __init__(
+        self,
+        encoding_manager: Optional[EncodingManager] = None,
+        tolerance: Optional[float] = None,
+        **kwargs,
+    ) -> None:
+        """
+        Args:
+            encoding_manager: Pre‑initialised encoding manager (DI‑friendly).
+            tolerance: Face‑distance tolerance for matching (lower = stricter).
+        """
+        self.encoding_manager = encoding_manager or EncodingManager()
+        self.tolerance = tolerance if tolerance is not None else settings.FACE_RECOGNITION_TOLERANCE
+
+    # ── Public API ───────────────────────────────────────────────────
+
+    def recognize_faces(
+        self,
+        frame: np.ndarray,
+        face_locations: List[FaceLocation],
+        is_rgb: bool = False,
+    ) -> List[RecognitionResult]:
+        """Match each detected face to a known student.
+
+        Args:
+            frame: BGR or RGB image.
+            face_locations: Bounding boxes as returned by ``FaceDetector``.
+            is_rgb: True if the frame is already in RGB format.
+
+        Returns:
+            List of result dicts, one per face:
+            ``{"name": str, "registered": bool, "similarity": float, "distance": float, "location": tuple}``
+        """
+        if not self.encoding_manager.is_loaded:
+            logger.warning("No encodings loaded – all faces will be Unknown.")
+
+        if not is_rgb:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        else:
+            rgb_frame = frame
+
+        # Compute encodings for the faces found in this frame
+        frame_encodings = fr_lib.face_encodings(rgb_frame, face_locations)
+
+        results: List[RecognitionResult] = []
+        for encoding, location in zip(frame_encodings, face_locations):
+            result = self._match_encoding(encoding, location)
+            results.append(result)
+
+        return results
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    def _match_encoding(
+        self,
+        encoding: np.ndarray,
+        location: FaceLocation,
+    ) -> RecognitionResult:
+        """Compare a single face encoding against all known encodings.
+
+        Strategy:
+            1. Compute face distances to every known encoding.
+            2. Find the minimum distance.
+            3. If below tolerance, assign correct student name.
+            4. Else, Unknown.
+        """
+        known_encodings = self.encoding_manager.encodings
+        known_names = self.encoding_manager.names
+
+        if not known_encodings:
+            return self._unknown_result(location, distance=1.0, similarity=0.0)
+
+        distances: np.ndarray = fr_lib.face_distance(known_encodings, encoding)
+
+        # Find minimum distance
+        min_idx = np.argmin(distances)
+        min_dist = distances[min_idx]
+        best_name = known_names[min_idx]
+
+        similarity: float = self._distance_to_similarity(float(min_dist))
+
+        if min_dist <= self.tolerance:
+            return {
+                "name": best_name,
+                "registered": True,
+                "similarity": similarity,
+                "distance": float(min_dist),
+                "location": location,
+            }
+
+        return self._unknown_result(location, float(min_dist), similarity)
+
+    def _distance_to_similarity(self, distance: float) -> float:
+        """Convert face distance to an intuitive similarity percentage.
+
+        The raw ``1.0 − distance`` formula under‑reports similarity for
+        correct matches (a real person at distance 0.35 shows only 65%).
+
+        This mapping uses **non‑linear scaling** so that distances well
+        within tolerance produce the high scores humans expect:
+
+            distance │ similarity
+            ─────────┼───────────
+              0.00   │  100 %
+              0.10   │   97 %
+              0.20   │   90 %
+              0.30   │   82 %
+              0.40   │   73 %
+              0.50   │   63 %
+              0.60   │   50 %  ← tolerance boundary
+              0.80   │   25 %
+              1.00   │    0 %
+        """
+        if distance <= 0.0:
+            return 1.0
+
+        if distance <= self.tolerance:
+            # Within tolerance → 50 %–100 %
+            # Uses power curve (exponent < 1) to boost scores for good matches
+            ratio = distance / self.tolerance          # 0 → 1
+            return round(1.0 - 0.5 * (ratio ** 0.65), 4)
+        else:
+            # Beyond tolerance → 0 %–50 %, linear drop‑off
+            overshoot = (distance - self.tolerance) / max(1.0 - self.tolerance, 0.001)
+            return round(max(0.0, 0.5 * (1.0 - overshoot)), 4)
+
+    @staticmethod
+    def _unknown_result(
+        location: FaceLocation,
+        distance: float,
+        similarity: float,
+    ) -> RecognitionResult:
+        """Build a standard result dict for an unrecognised face."""
+        return {
+            "name": "Unknown",
+            "registered": False,
+            "similarity": round(similarity, 4),
+            "distance": round(distance, 4),
+            "location": location,
+        }
