@@ -96,6 +96,8 @@
         angry:'😠', surprised:'😲', fearful:'😨', disgusted:'🤢'
     };
 
+    const MAX_LOG_CARDS = 30; // cap visible log cards for performance
+
     function emotionStr(e) {
         const k = (e || '').toLowerCase();
         return `${EMOJIS[k] || '😐'} ${e ? e.charAt(0).toUpperCase() + e.slice(1) : 'Neutral'}`;
@@ -158,6 +160,7 @@
                     store.cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
                     dom.cameraVideo.srcObject = store.cameraStream;
                     dom.cameraVideo.style.display = 'block';
+                    dom.cameraVideo.style.transform = 'scaleX(-1)'; // natural mirror fix
                     dom.cameraWrapper.classList.add('active');
                     dom.cameraBtn.textContent = 'Stop Camera';
                     dom.cameraBtn.classList.add('camera-toggle-active');
@@ -366,8 +369,11 @@
             </div>`;
         container.prepend(card);
 
-        const cards = $$('.log-card', container);
-        if (cards.length > 50) cards[cards.length - 1].remove();
+        // Cull excess cards for performance
+        const cards = container.children;
+        while (cards.length > MAX_LOG_CARDS) {
+            cards[cards.length - 1].remove();
+        }
     }
 
     // ══════════════════════════════════════
@@ -418,7 +424,8 @@
             dom.summaryGrid.innerHTML = '<div class="summary-empty">No students detected yet</div>';
             return;
         }
-        dom.summaryGrid.innerHTML = '';
+        // Use DocumentFragment for batched DOM insertion
+        const frag = document.createDocumentFragment();
         names.forEach(name => {
             const s = store.students[name];
             const card = document.createElement('div');
@@ -448,8 +455,9 @@
                     </div>
                 </div>
                 ${qHTML}`;
-            dom.summaryGrid.appendChild(card);
+            frag.appendChild(card);
         });
+        dom.summaryGrid.replaceChildren(frag);
     }
 
     // ══════════════════════════════════════
