@@ -1,1 +1,27 @@
-[]
+[
+  {
+    "event": "attendance",
+    "student": "Menna_Abdo",
+    "attendance": "Present",
+    "registered": true,
+    "timestamp": "2026-05-11T01:31:58.580681+00:00"
+  },
+  {
+    "event": "emotion",
+    "student": "Menna_Abdo",
+    "mood": "Happy",
+    "registered": true,
+    "samples": 5,
+    "timestamp": "2026-05-11T01:32:02.159787+00:00"
+  },
+  {
+    "event": "question",
+    "student": "Menna_Abdo",
+    "question": "TCB server.",
+    "topic": "Computer Networks",
+    "classification_confidence": 0.8521,
+    "timestamp": "2026-05-11T01:32:17.030301+00:00",
+    "registered": true,
+    "source": "interaction_ask_question"
+  }
+]
